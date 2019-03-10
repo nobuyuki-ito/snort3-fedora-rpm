@@ -1,28 +1,13 @@
 # $Id$
 # Snort.org's SPEC file for Snort
 
-################################################################
-# rpmbuild Package Options
-# ========================
-#
-# See README.build_rpms for more details.
-#
-# 	--without openappid
-# 		exclude openAppId preprocessor
-# See pg 399 of _Red_Hat_RPM_Guide_ for rpmbuild --with and --without options.
-################################################################
-
 # Other useful bits
 %define SnortRulesDir %{_sysconfdir}/snort/rules
 %define noShell /bin/false
 
-# Handle the options noted above.
-# Default with openAppId, but '--without openappid' will disable it
-%define openappid 1
-%{?_without_openappid:%define openappid 0}
-
 %define vendor Snort.org
 %define for_distro RPMs
+%define gitCommitIdSuffix 20190221.gita3afcbe
 %define release 1
 %define realname snort
 
@@ -41,32 +26,25 @@
   %define release 1.caos
 %endif
 
-%if !%{openappid}
-  %define DisableOpenAppId --disable-open-appid
-%endif
-
-%if %{openappid}
-Name: %{realname}-openappid
-Version: 2.9.12
-Summary: An open source Network Intrusion Detection System (NIDS) with open AppId support
-Conflicts: %{realname}
-%else
 Name: %{realname}
-Version: 2.9.12
+Version: 3.0.0
 Summary: An open source Network Intrusion Detection System (NIDS)
-Conflicts: %{realname}-openappid
-%endif
 Epoch: 1
-Release: %{release}
+Release: %{release}.%{gitCommitIdSuffix}%{dist}
 Group: Applications/Internet
 License: GPL
 Url: http://www.snort.org/
-Source0: https://www.snort.org/downloads/snort/%{realname}-%{version}.tar.gz
+Source0: %{realname}-%{version}-%{gitCommitIdSuffix}.tar.xz
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 Packager: Official Snort.org %{for_distro}
 Vendor: %{vendor}
-BuildRequires: autoconf, automake, pcre-devel, libpcap-devel
+Requires: daq >= 2.2.2, libdnet, hwloc, luajit, openssl, libpcap, pcre, hyperscan, flatbuffers, libuuid, gperftools-libs, zlib
+#, lzma-libs
+#, libsafec
+BuildRequires: cmake, gcc, gcc-c++, daq-devel >= 2.2.2, libdnet-devel, hwloc-devel, luajit-devel, openssl-devel, libpcap-devel, pcre-devel, hyperscan-devel, flatbuffers-devel, glibc-headers, libuuid-devel, gperftools, gperftools-devel, zlib-devel, asciidoc, asciidoc-latex, dblatex
+#, lzma-devel
+#, libsafec-devel
 
 %description
 Snort is an open source network intrusion detection system, capable of
@@ -85,141 +63,45 @@ You MUST edit /etc/snort/snort.conf to configure snort before it will work!
 Please see the documentation in %{_docdir}/%{realname}-%{version} for more
 information on snort features and configuration.
 
+%package devel
+Summary: Development tools for Snort
+Requires: %{name} == %{version}
+
+%description devel
+Development tools for Snort
+
 
 %prep
-%setup -q -n %{realname}-%{version}
-
-# When building from a Snort.org CVS snapshot tarball, you have to run
-# autojunk before you can build.
-if [ \( ! -s configure \) -a \( -x autojunk.sh \) ]; then
-    ./autojunk.sh
-fi
-
-# Make sure it worked, or die with a useful error message.
-if [ ! -s configure ]; then
-    echo "Can't find ./configure.  ./autojunk.sh not present or not executable?"
-    exit 2
-fi
-
+%setup -q -n %{realname}3
 
 %build
-
-BuildSnort() {
-   %__mkdir "$1"
-   cd "$1"
-   %__ln_s ../configure ./configure
-
-   if [ "$1" = "plain" ] ; then
-       ./configure $SNORT_BASE_CONFIG \
-       %{?DisableOpenAppId}
-   fi
-
-   if [ "$1" = "openappid" ] ; then
-       ./configure $SNORT_BASE_CONFIG
-   fi
-
-   %__make
-   %__mv src/snort ../%{realname}-"$1"
-   cd ..
-}
-
-
+#%{__sed} -i -r -e '/-DCMAKE_EXPORT_COMPILE_COMMANDS/ a -DLIBLZMA_LIBRARIES=/usr/lib64/liblzma.so.5 \\' ./configure_cmake.sh
 CFLAGS="$RPM_OPT_FLAGS"
 export AM_CFLAGS="-g -O2"
-SNORT_BASE_CONFIG="--prefix=%{_prefix} \
-                   --bindir=%{_sbindir} \
-                   --sysconfdir=%{_sysconfdir}/snort \
-                   --with-libpcap-includes=%{_includedir} \
-                   --enable-targetbased \
-                   --enable-control-socket"
+./configure_cmake.sh --prefix=%{_prefix} --disable-static-daq --enable-hardened-build --enable-pie --enable-tcmalloc 
+# --disable-gdb
+cd ./build
+%{make_build} all
 
-%if %{openappid}
-  BuildSnort openappid
-%else
-  BuildSnort plain
-%endif
 
 %install
+cd ./build
+%{make_install}
 
-# Remove leftover CVS files in the tarball, if any...
-find . -type 'd' -name "CVS" -print | xargs %{__rm} -rf
+%{__mv} $RPM_BUILD_ROOT%{_libdir}/%{realname}/daqs $RPM_BUILD_ROOT%{_libdir}/daq
+[[ "X$RPM_BUILD_ROOT" = "X/" ]] || %{__rm} -rf $RPM_BUILD_ROOT%{_libdir}/%{realname}
+%{__mkdir_p} $RPM_BUILD_ROOT%{_sbindir}
+%{__mv} $RPM_BUILD_ROOT%{_bindir}/%{realname} $RPM_BUILD_ROOT%{_sbindir}/
+%{__mkdir_p} $RPM_BUILD_ROOT%{_sysconfdir}/%{realname}
+%{__mv} $RPM_BUILD_ROOT%{_prefix}/etc/%{realname} $RPM_BUILD_ROOT%{_sysconfdir}/
+[ -n "$RPM_BUILD_ROOT" -a "$RPM_BUILD_ROOT" != / ] && %{__rm} -rf $RPM_BUILD_ROOT%{_prefix}/etc
+%{__mkdir_p} $RPM_BUILD_ROOT%{SnortRulesDir}
+%{__mv} $RPM_BUILD_ROOT%{_docdir}/%{realname} $RPM_BUILD_ROOT%{_docdir}/%{realname}-%{version}
+%{__mkdir_p} $RPM_BUILD_ROOT%{_var}/log/snort
 
-InstallSnort() {
-   if [ "$1" = "plain" ] || [ "$1" = "openappid" ]; then
-	%__rm -rf $RPM_BUILD_ROOT
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{_sbindir}
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{_bindir}
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{SnortRulesDir}
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{_sysconfdir}/snort
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{_sysconfdir}/logrotate.d
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{_var}/log/snort
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{_initrddir}
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{_mandir}/man8
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{_docdir}/%{realname}-%{version}
-	%__install -p -m 0755 %{realname}-"$1" $RPM_BUILD_ROOT%{_sbindir}/%{realname}-"$1"
-	%__install -p -m 0755 "$1"/tools/control/snort_control $RPM_BUILD_ROOT%{_bindir}/snort_control
-	%__install -p -m 0755 "$1"/tools/u2spewfoo/u2spewfoo $RPM_BUILD_ROOT%{_bindir}/u2spewfoo
-	%__install -p -m 0755 "$1"/tools/u2boat/u2boat $RPM_BUILD_ROOT%{_bindir}/u2boat
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{_libdir}/%{realname}-%{version}_dynamicengine
-	%__mkdir_p -m 0755 $RPM_BUILD_ROOT%{_libdir}/%{realname}-%{version}_dynamicpreprocessor
-	%__install -p -m 0755 "$1"/src/dynamic-plugins/sf_engine/.libs/libsf_engine.so.0 $RPM_BUILD_ROOT%{_libdir}/%{realname}-%{version}_dynamicengine
-	%__ln_s -f %{_libdir}/%{realname}-%{version}_dynamicengine/libsf_engine.so.0 $RPM_BUILD_ROOT%{_libdir}/%{realname}-%{version}_dynamicengine/libsf_engine.so
-	%__install -p -m 0755 "$1"/src/dynamic-preprocessors/build%{_prefix}/lib/snort_dynamicpreprocessor/*.so* $RPM_BUILD_ROOT%{_libdir}/%{realname}-%{version}_dynamicpreprocessor
-	
-    for file in $RPM_BUILD_ROOT%{_libdir}/%{realname}-%{version}_dynamicpreprocessor/*.so;  do  
-          preprocessor=`basename $file`
-          %__ln_s -f %{_libdir}/%{realname}-%{version}_dynamicpreprocessor/$preprocessor.0 $file     
-    done   
-	
-	%__install -p -m 0644 snort.8 $RPM_BUILD_ROOT%{_mandir}/man8
-
-	%__rm -rf $RPM_BUILD_ROOT%{_mandir}/man8/snort.8.gz
-	%__gzip $RPM_BUILD_ROOT%{_mandir}/man8/snort.8
-	%__install -p -m 0755 rpm/snortd $RPM_BUILD_ROOT%{_initrddir}
-	%__install -p -m 0644 rpm/snort.sysconfig $RPM_BUILD_ROOT%{_sysconfdir}/sysconfig/%{realname}
-	%__install -p -m 0644 rpm/snort.logrotate $RPM_BUILD_ROOT%{_sysconfdir}/logrotate.d/snort
-	%__install -p -m 0644 etc/reference.config etc/classification.config \
-		etc/unicode.map etc/gen-msg.map \
-		etc/threshold.conf etc/snort.conf \
-		$RPM_BUILD_ROOT%{_sysconfdir}/snort
-	find doc -maxdepth 1 -type f -not -name 'Makefile*' -exec %__install -p -m 0644 {} $RPM_BUILD_ROOT%{_docdir}/%{realname}-%{version} \;
-
-	%__rm -f $RPM_BUILD_ROOT%{_docdir}/%{realname}-%{version}/Makefile.*
-   fi
-   if [ "$1" = "openappid" ]; then
-	%__install -p -m 0755 "$1"/tools/u2openappid/u2openappid $RPM_BUILD_ROOT%{_bindir}/u2openappid
-        # This isn't built, it has to be copied from the source tree
-        %__install -p -m 0755 tools/appid_detector_builder.sh $RPM_BUILD_ROOT%{_bindir}/appid_detector_builder.sh
-   fi
-}
-
-# Fix the RULE_PATH
-%__sed -e 's;var RULE_PATH ../rules;var RULE_PATH %{SnortRulesDir};' \
-	< etc/snort.conf > etc/snort.conf.new
-%__rm -f etc/snort.conf
-%__mv etc/snort.conf.new etc/snort.conf
-
-# Fix dynamic-preproc paths
-%__sed -e 's;dynamicpreprocessor directory \/usr\/local/lib\/snort_dynamicpreprocessor;dynamicpreprocessor directory %{_libdir}\/%{realname}-%{version}_dynamicpreprocessor;' < etc/snort.conf > etc/snort.conf.new
-%__rm -f etc/snort.conf
-%__mv etc/snort.conf.new etc/snort.conf
-
-# Fix dynamic-engine paths
-%__sed -e 's;dynamicengine \/usr\/local/lib\/snort_dynamicengine;dynamicengine %{_libdir}\/%{realname}-%{version}_dynamicengine;' < etc/snort.conf > etc/snort.conf.new
-%__rm -f etc/snort.conf
-%__mv etc/snort.conf.new etc/snort.conf
-
-
-
-%if %{openappid}
-  InstallSnort openappid
-%else
-  InstallSnort plain
-%endif
 
 %clean
-%__rm -rf $RPM_BUILD_ROOT
+[ -n "$RPM_BUILD_ROOT" -a "$RPM_BUILD_ROOT" != / ] && rm -rf $RPM_BUILD_ROOT
 
 
 %pre
@@ -229,39 +111,7 @@ if [ $1 = 1 ] ; then
 	/usr/sbin/useradd -M -d %{_var}/log/snort -s %{noShell} -c "Snort" -g snort snort 2>/dev/null || true
 fi
 
-%post
-# Make a symlink if there is no link for snort-plain
-%if %{openappid}
-  if [ -L %{_sbindir}/snort ] || [ ! -e %{_sbindir}/snort ] ; then \
-    %__rm -f %{_sbindir}/snort; %__ln_s %{_sbindir}/%{name} %{_sbindir}/snort; fi
-%else
-  if [ -L %{_sbindir}/snort ] || [ ! -e %{_sbindir}/snort ] ; then \
-    %__rm -f %{_sbindir}/snort; %__ln_s %{_sbindir}/%{name}-plain %{_sbindir}/snort; fi
-%endif
-
-# We should restart it to activate the new binary if it was upgraded
-%{_initrddir}/snortd condrestart 1>/dev/null 2>/dev/null
-
-# Don't do all this stuff if we are upgrading
-if [ $1 = 1 ] ; then
-	%__chown -R snort.snort %{_var}/log/snort
-	/sbin/chkconfig --add snortd
-fi
-
-
-%preun
-if [ $1 = 0 ] ; then
-	# We get errors about not running, but we don't care
-	%{_initrddir}/snortd stop 2>/dev/null 1>/dev/null
-	/sbin/chkconfig --del snortd
-fi
-
 %postun
-# Try and restart, but don't bail if it fails
-if [ $1 -ge 1 ] ; then
-	%{_initrddir}/snortd condrestart  1>/dev/null 2>/dev/null || :
-fi
-
 # Only do this if we are actually removing snort
 if [ $1 = 0 ] ; then
 	if [ -L %{_sbindir}/snort ]; then
@@ -273,36 +123,24 @@ fi
 
 %files
 %defattr(-,root,root)
-%if %{openappid}
-%attr(0755,root,root) %{_sbindir}/%{name}
-%attr(0755,root,root) %{_bindir}/u2openappid
+%attr(0755,root,root) %{_libdir}/daq/*.so
 %attr(0755,root,root) %{_bindir}/appid_detector_builder.sh
-%else
-%attr(0755,root,root) %{_sbindir}/%{name}-plain
-%endif
-%attr(0755,root,root) %{_bindir}/snort_control
-%attr(0755,root,root) %{_bindir}/u2spewfoo
+%attr(0755,root,root) %{_bindir}/fbstreamer
 %attr(0755,root,root) %{_bindir}/u2boat
-%attr(0644,root,root) %{_mandir}/man8/snort.8.*
+%attr(0755,root,root) %{_bindir}/u2spewfoo
+%attr(0755,root,root) %{_bindir}/snort2lua
+%attr(0755,root,root) %{_sbindir}/%{realname}
+%attr(0755,root,root) %dir %{_sysconfdir}/%{realname}
+%attr(0644,root,root) %config(noreplace) %{_sysconfdir}/%{realname}/*.lua
 %attr(0755,root,root) %dir %{SnortRulesDir}
-%attr(0644,root,root) %config(noreplace) %{_sysconfdir}/snort/classification.config
-%attr(0644,root,root) %config(noreplace) %{_sysconfdir}/snort/reference.config
-%attr(0644,root,root) %config(noreplace) %{_sysconfdir}/snort/threshold.conf
-%attr(0644,root,root) %config(noreplace) %{_sysconfdir}/snort/*.map
-%attr(0644,root,root) %config(noreplace) %{_sysconfdir}/logrotate.d/snort
-%attr(0644,root,root) %config(noreplace) %{_sysconfdir}/snort/snort.conf
-%attr(0644,root,root) %config(noreplace) %{_sysconfdir}/sysconfig/snort
-%attr(0755,root,root) %config(noreplace) %{_initrddir}/snortd
+%attr(0644,root,root) %{_includedir}/%{realname}/lua/*.lua
 %attr(0755,snort,snort) %dir %{_var}/log/snort
-%attr(0755,root,root) %dir %{_sysconfdir}/snort
-%attr(0644,root,root) %{_docdir}/%{realname}-%{version}/*
-%attr(0755,root,root) %dir %{_libdir}/%{realname}-%{version}_dynamicengine
-%attr(0755,root,root) %{_libdir}/%{realname}-%{version}_dynamicengine/libsf_engine.*
-%attr(0755,root,root) %dir %{_libdir}/%{realname}-%{version}_dynamicpreprocessor
-%attr(0755,root,root) %{_libdir}/%{realname}-%{version}_dynamicpreprocessor/libsf_*_preproc.*
+%doc %{_docdir}/%{realname}-%{version}
 
-%dir %{_docdir}/%{realname}-%{version}
-%docdir %{_docdir}/%{realname}-%{version}
+%files devel
+%{_libdir}/pkgconfig/%{realname}.pc
+%{_includedir}/%{realname}/*/*.h
+%{_includedir}/%{realname}/*/*/*.h
 
 ################################################################
 # Thanks to the following for contributions to the Snort.org SPEC file:
@@ -320,6 +158,9 @@ fi
 #	Vlatko Kosturjak <kost@linux.hr>
 
 %changelog
+* Sun Mar 10 2019 Nobuyuki Ito <info@2ito.com> - 3.0.0.20190221.gita3afcbe
+- Fixed spec file for snort3 and Fedora 29
+
 * Thu Jul 03 2014 Dilbagh Chahal <dchahal@cisco.com> 2.9.7
 - added --with openappid command line option
 
